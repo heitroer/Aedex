@@ -6,3 +6,4 @@ requests
 matplotlib
 xgboost
 Pillow
+scikit-learn
