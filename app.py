@@ -239,8 +239,8 @@ if df is not None:
     # 8. GRÁFICO DE SÉRIES TEMPORAIS COM PLOTLY (TEMA ESCURO + HISTÓRICO)
     st.markdown("### Validação Histórica e Horizonte Preditivo")
     
-    # Exibindo as últimas 52 semanas (1 ano) em vez de apenas 15 para melhor visualização histórica
-    df_ultimas = df_limpo.tail(52).copy()
+    # Exibindo as últimas 26 semanas (1 semestre)
+    df_ultimas = df_limpo.tail(26).copy()
     df_ultimas['label'] = df_ultimas['semana'].astype(str) + "/" + df_ultimas['ano'].astype(str)
     
     fig = go.Figure()
