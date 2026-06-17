@@ -9,7 +9,7 @@ import PIL.Image as Image
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Aedex - Monitoramento Inteligente", layout="wide", initial_sidebar_state="expanded")
 
-# 2. CSS MODERNO PARA UI/UX AVANÇADA
+# 2. CSS MODERNO PARA UI/UX
 st.markdown("""
 <style>
     .stApp {
@@ -68,7 +68,7 @@ col_logo, col_titulo = st.columns([1, 6])
 with col_logo:
     try:
         logo_img = Image.open('logo.png')
-        st.image(logo_img, use_container_width=True)
+        st.image(logo_img, width='stretch')
     except Exception:
         st.markdown("<h1 style='color:#1A5FFF;'>AEDEX</h1>", unsafe_allow_html=True)
 
@@ -78,7 +78,7 @@ with col_titulo:
 
 st.markdown("---")
 
-# 5. LÓGICA DE BACKEND (Carregamento e Processamento)
+# 5. LÓGICA DE BACKEND
 @st.cache_resource
 def carregar_modelo():
     return joblib.load("modelo_aedex.pkl")
@@ -114,22 +114,25 @@ def puxar_dados_api():
 df = puxar_dados_api()
 
 if df is not None:
-    # Engenharia de Atributos (Atualmente gera 12 variáveis)
+    # Engenharia de Atributos Avançada (Gera exatamente 20 variáveis: 2 sazonais + 16 lags + 2 médias)
     df['log_casos'] = np.log1p(df['casos'])
     df['sem_seno'] = np.sin(2 * np.pi * df['semana'] / 52.0)
     df['sem_cos']  = np.cos(2 * np.pi * df['semana'] / 52.0)
 
-    for lag in range(1, 9): df[f'log_lag{lag}'] = df['log_casos'].shift(lag)
+    # Criando 16 lags para alinhar com o shape esperado pelo XGBoost
+    for lag in range(1, 17): 
+        df[f'log_lag{lag}'] = df['log_casos'].shift(lag)
+        
     df['media_mov_4sem'] = df['log_casos'].shift(1).rolling(4).mean()
     df['media_mov_8sem'] = df['log_casos'].shift(1).rolling(8).mean()
 
-    feature_cols = ['sem_seno', 'sem_cos', 'log_lag1', 'log_lag2', 'log_lag3', 'log_lag4',
-                    'log_lag5', 'log_lag6', 'log_lag7', 'log_lag8', 'media_mov_4sem', 'media_mov_8sem']
+    # Construindo a lista de features estruturada idêntica ao modelo
+    feature_cols = ['sem_seno', 'sem_cos'] + [f'log_lag{i}' for i in range(1, 17)] + ['media_mov_4sem', 'media_mov_8sem']
     
     df_limpo = df.dropna(subset=feature_cols + ['log_casos']).reset_index(drop=True)
 
-    # Loop de Projeção Iterativa
-    historico_log = df_limpo['log_casos'].tail(8).tolist()
+    # Loop de Projeção Iterativa (Histórico expandido para 16 posições)
+    historico_log = df_limpo['log_casos'].tail(16).tolist()
     ultima_linha = df_limpo.iloc[-1].copy()
     features_atuais = ultima_linha[feature_cols].copy()
     sem_sim = int(ultima_linha['semana'])
@@ -146,72 +149,63 @@ if df is not None:
         
         features_atuais['sem_seno'] = np.sin(2 * np.pi * sem_sim / 52.0)
         features_atuais['sem_cos'] = np.cos(2 * np.pi * sem_sim / 52.0)
-        for lag in range(1, 9): features_atuais[f'log_lag{lag}'] = historico_log[-lag]
+        
+        for lag in range(1, 17): 
+            features_atuais[f'log_lag{lag}'] = historico_log[-lag]
+            
         features_atuais['media_mov_4sem'] = np.mean(historico_log[-4:])
         features_atuais['media_mov_8sem'] = np.mean(historico_log[-8:])
         
-        input_df = features_atuais.to_frame().T
-        input_df = input_df.astype(float)
+        # Garante a formatação correta dos dados estruturados antes da inferência
+        input_df = pd.DataFrame([features_atuais])
+        input_df = input_df[feature_cols].astype(float)
             
         try:
             p = float(modelo_prod.predict(input_df)[0])
             log_futuro.append(p)
             historico_log.append(p)
         except ValueError as e:
-            st.error(f"**Incompatibilidade de Variáveis:** O modelo e o código não estão alinhados. Erro bruto: `{e}`")
-            
-            features_esperadas = None
-            if hasattr(modelo_prod, 'feature_names_in_'):
-                features_esperadas = list(modelo_prod.feature_names_in_)
-            elif hasattr(modelo_prod, 'get_booster'):
-                try:
-                    features_esperadas = modelo_prod.get_booster().feature_names
-                except Exception:
-                    pass
-            
-            if features_esperadas:
-                st.warning(f"O seu modelo '.pkl' foi treinado especificamente com estas {len(features_esperadas)} variáveis: \n\n`{', '.join(features_esperadas)}`")
-                st.info("Para resolver o erro definitivamente, volte na seção de 'Engenharia de Atributos' no código e garanta que o DataFrame crie exatamente essas colunas listadas acima.")
+            st.error(f"**Erro de Alinhamento:** O modelo espera dados diferentes. Erro: `{e}`")
             st.stop()
 
     casos_projetados_fim = int(np.expm1(log_futuro[-1]))
 
-    # Definição de Status
+    # Definição de Classificação de Risco Epidemiológico
     if casos_projetados_fim < 50:
         status, cor = "AZUL — ESTÁVEL", "#1A5FFF"
         protocolo = "Situação de normalidade. Manter vigilância passiva de notificações nas unidades."
     elif casos_projetados_fim < 150:
         status, cor = "AMARELO — ATENÇÃO", "#fca326"
-        protocolo = "Início de sazonalidade. Revisar estoques de testes rápidos NS1 e soro nas UBS."
+        protocolo = "Início de sazonalidade. Revisar estoques de testes rápidos NS1 e insumos de hidratação nas UBS."
     elif casos_projetados_fim < 400:
         status, cor = "LARANJA — ALERTA", "#db6d28"
-        protocolo = "Pré-surto. Gatilho de contingência nível 1: Ampliar triagem, abrir salas de hidratação rápida."
+        protocolo = "Pré-surto. Gatilho de contingência nível 1: Ampliar equipes de triagem e abrir salas de hidratação rápida."
     else:
         status, cor = "VERMELHO — CRISE", "#cf222e"
-        protocolo = "Emergência de Saúde Coletiva: Criar polo de atendimento específico e mutirões comunitários."
+        protocolo = "Emergência de Saúde Pública: Criação de polos de atendimento específico e mutirões intersetoriais."
 
-    # 6. DASHBOARD UI - Linha de Indicadores Preditivos
+    # 6. DASHBOARD UI - Indicadores Preditivos
     st.markdown("### Visão Geral do Risco")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric(label="Casos Estimados (Em 4 sem.)", value=f"{casos_projetados_fim}", delta="Projeção Aedex", delta_color="normal")
+        st.metric(label="Casos Estimados (Em 4 sem.)", value=f"{casos_projetados_fim}", delta="Projeção Dinâmica", delta_color="normal")
     with col2:
         st.metric(label="Última Atualização Real", value=f"Semana {int(ultima_linha['semana'])}", delta=f"Ano {int(ultima_linha['ano'])}", delta_color="off")
     with col3:
         st.markdown("<p style='color: #64748b; font-weight: 600; font-size: 1.05rem; margin-bottom: 5px;'>Nível de Risco Operacional</p>", unsafe_allow_html=True)
         st.markdown(f"<div style='background-color: {cor}; color: white; padding: 12px; border-radius: 8px; font-weight: 700; text-align: center; font-size: 1.1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>{status}</div>", unsafe_allow_html=True)
 
-    # 7. PROTOCOLO CLÍNICO
+    # 7. PROTOCOLO OPERACIONAL CLINICO
     st.markdown("<br>", unsafe_allow_html=True)
     with st.container(border=True):
-        st.markdown(f"#### Protocolo Clínico UBS Recomendado")
+        st.markdown(f"#### Diretriz de Enfrentamento Clínico (UBS)")
         st.markdown(f"<p style='font-size: 1.1rem; color: #334155;'>{protocolo}</p>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 8. GRÁFICO INTERATIVO COM PLOTLY
-    st.markdown("### Curva de Monitoramento e Projeção")
+    # 8. GRÁFICO DE SÉRIES TEMPORAIS COM PLOTLY
+    st.markdown("### Linha de Tendência e Horizonte Preditivo")
     
     df_ultimas = df_limpo.tail(15).copy()
     df_ultimas['label'] = df_ultimas['semana'].astype(str) + "/" + df_ultimas['ano'].astype(str)
@@ -246,10 +240,10 @@ if df is not None:
         legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
         hovermode="x unified",
         xaxis=dict(showgrid=True, gridcolor='#f1f5f9', title="Semana Epidemiológica"),
-        yaxis=dict(showgrid=True, gridcolor='#f1f5f9', title="Número de Casos")
+        yaxis=dict(showgrid=True, gridcolor='#f1f5f9', title="Número de Casos Real/Estimado")
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 else:
-    st.error("Não foi possível carregar os dados para gerar o painel.")
+    st.error("Não foi possível estabelecer conexão para processamento dos dados da API.")
