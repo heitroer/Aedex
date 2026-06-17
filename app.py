@@ -6,8 +6,8 @@ import requests
 import plotly.graph_objects as go
 import PIL.Image as Image
 
-# 1. CONFIGURAÇÃO DA PÁGINA (Deve ser a primeira linha)
-st.set_page_config(page_title="Aedex - Monitoramento Inteligente", page_icon="🦟", layout="wide", initial_sidebar_state="expanded")
+# 1. CONFIGURAÇÃO DA PÁGINA
+st.set_page_config(page_title="Aedex - Monitoramento Inteligente", layout="wide", initial_sidebar_state="expanded")
 
 # 2. CSS MODERNO PARA UI/UX AVANÇADA
 st.markdown("""
@@ -51,9 +51,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. BARRA LATERAL (SIDEBAR) - Tom Profissional e Científico
+# 3. BARRA LATERAL (SIDEBAR)
 with st.sidebar:
-    st.markdown("<h2 style='color:#1A5FFF; text-align: center;'>Aedex v2.0</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color:#1A5FFF; text-align: center;'>Aedex</h2>", unsafe_allow_html=True)
     st.caption("<div style='text-align: center; margin-bottom: 20px;'>Painel Operacional Avançado</div>", unsafe_allow_html=True)
     st.divider()
     
@@ -68,7 +68,7 @@ with st.sidebar:
     - **Horizonte:** 4 Semanas
     """)
     st.divider()
-    st.success("🟢 Conexão com API Estável")
+    st.success("Conexão com API Estável")
 
 # 4. CABEÇALHO PRINCIPAL
 col_logo, col_titulo = st.columns([1, 6])
@@ -157,10 +157,13 @@ if df is not None:
         features_atuais['media_mov_4sem'] = np.mean(historico_log[-4:])
         features_atuais['media_mov_8sem'] = np.mean(historico_log[-8:])
         
-        # Correção de Alinhamento de Features
+        # Estruturação e Alinhamento de Features
         input_df = features_atuais.to_frame().T
         if hasattr(modelo_prod, 'feature_names_in_'):
-            input_df = input_df.reindex(columns=modelo_prod.feature_names_in_, fill_value=0)
+            input_df = input_df.reindex(columns=modelo_prod.feature_names_in_, fill_value=0.0)
+            
+        # SOLUÇÃO DO ERRO: Força a conversão de tipos de object para float64 antes do predict
+        input_df = input_df.astype(float)
             
         p = float(modelo_prod.predict(input_df)[0])
         log_futuro.append(p)
@@ -187,7 +190,7 @@ if df is not None:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric(label="Casos Estimados (Em 4 sem.)", value=f"{casos_projetados_fim}", delta="↗ Projeção Aedex", delta_color="normal")
+        st.metric(label="Casos Estimados (Em 4 sem.)", value=f"{casos_projetados_fim}", delta="Projeção Aedex", delta_color="normal")
     with col2:
         st.metric(label="Última Atualização Real", value=f"Semana {int(ultima_linha['semana'])}", delta=f"Ano {int(ultima_linha['ano'])}", delta_color="off")
     with col3:
@@ -195,9 +198,9 @@ if df is not None:
         st.markdown(f"<div style='background-color: {cor}; color: white; padding: 12px; border-radius: 8px; font-weight: 700; text-align: center; font-size: 1.1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);'>{status}</div>", unsafe_allow_html=True)
 
     # 7. PROTOCOLO CLÍNICO
-    st.markdown("<br>", unsafe_allow_html=True) # Espaçamento
+    st.markdown("<br>", unsafe_allow_html=True)
     with st.container(border=True):
-        st.markdown(f"#### 📋 Protocolo Clínico UBS Recomendado")
+        st.markdown(f"#### Protocolo Clínico UBS Recomendado")
         st.markdown(f"<p style='font-size: 1.1rem; color: #334155;'>{protocolo}</p>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -243,7 +246,6 @@ if df is not None:
         yaxis=dict(showgrid=True, gridcolor='#f1f5f9', title="Número de Casos")
     )
     
-    # Exibir no Streamlit usando a largura total do container
     st.plotly_chart(fig, use_container_width=True)
 
 else:
