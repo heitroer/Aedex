@@ -8,7 +8,7 @@ import PIL.Image as Image # Para carregar a logo
 
 # CONFIGURAÇÃO DE DESIGN E TEMA
 # Definindo as cores da logo (Azul: #1A5FFF, Branco: #FFFFFF)
-st.set_page_config(page_title="Aedex - Monitoramento Inteligente", page_icon="🦟", layout="wide")
+st.set_page_config(page_title="Aedex - Monitoramento Inteligente", layout="wide")
 
 # Estilo CSS para forçar o tema e cards azuis
 st.markdown("""
