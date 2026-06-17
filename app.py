@@ -1,0 +1,239 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
+import requests
+import matplotlib.pyplot as plt
+import PIL.Image as Image # Para carregar a logo
+
+# --- CONFIGURAÇÃO DE DESIGN E TEMA ---
+# Definindo as cores da logo (Azul: #1A5FFF, Branco: #FFFFFF)
+st.set_page_config(page_title="Aedex - Monitoramento Inteligente", page_icon="🦟", layout="wide")
+
+# Estilo CSS para forçar o tema e cards azuis
+st.markdown("""
+<style>
+    /* Fundo geral Branco */
+    .stApp {
+        background-color: #FFFFFF;
+        color: #1A5FFF;
+    }
+    
+    /* Títulos e textos em Azul */
+    h1, h2, h3, h4, h5, h6, p, label {
+        color: #1A5FFF !important;
+    }
+
+    /* Estilizando o Metrics Card */
+    div[data-testid="stMetricValue"] {
+        color: #1A5FFF !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #8b949e !important; /* Cinza para o label */
+    }
+
+    /* Estilizando os Cards de Sucesso/Alerta (Alinhado com as cores da logo) */
+    .stAlert {
+        border-radius: 10px;
+        color: #FFFFFF !important; /* Texto branco dentro do card colorido */
+    }
+    .stAlert h1, .stAlert h2, .stAlert h3 {
+        color: #FFFFFF !important;
+    }
+    .st-success {
+        background-color: #1A5FFF; /* Fundo Azul Logo para estável */
+    }
+    .st-warning {
+        background-color: #fca326; /* Amarelo/Laranja para alerta */
+    }
+    .st-error {
+        background-color: #cf222e; /* Vermelho para crise */
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# 1. CENTRALIZAÇÃO DA LOGO E TÍTULO
+col_logo, col_vazia = st.columns([1, 4]) # Centralizando mais a logo
+with col_logo:
+    # IMPORTANTE: Você deve colocar o arquivo 'logo.png' na mesma pasta do GitHub!
+    try:
+        logo_img = Image.open('logo.png')
+        st.image(logo_img, width=150)
+    except Exception:
+        st.write("---") # Caso não ache a imagem, coloca uma linha
+
+
+st.title("Sistema Aedex v2.0 — Painel Operacional")
+st.markdown("Previsão Epidemiológica Avançada e Suporte à Decisão Clínica para as UBS de Campo Grande/MS.")
+st.markdown("---")
+
+# 2. Carregar o Modelo já treinado pelo seu script
+@st.cache_resource
+def carregar_modelo():
+    return joblib.load("modelo_aedex.pkl")
+
+try:
+    modelo_prod = carregar_modelo()
+except Exception as e:
+    st.error("Erro: O arquivo 'modelo_aedex.pkl' não foi encontrado no repositório do GitHub.")
+    st.stop()
+
+# 3. Coleta de Dados em Tempo Real via API do InfoDengue
+@st.cache_data(ttl=86400) # Atualiza os dados uma vez por dia
+def puxar_dados_api():
+    # URL para Campo Grande/MS (Geocódigo: 5002704) de 2016 até o futuro
+    url = "https://info.dengue.mat.br/api/alertcity/?geocode=5002704&disease=dengue&format=json&ew_start=1&ey_start=2016&ew_end=52&ey_end=2026"
+    try:
+        resp = requests.get(url, timeout=25)
+        resp.raise_for_status()
+        df = pd.DataFrame(resp.json())
+
+        # Processamento inicial idêntico ao seu script
+        df['ano'] = df['SE'].astype(str).str[:4].astype(int)
+        df['semana'] = df['SE'].astype(str).str[4:].astype(int)
+        df = df.sort_values(['ano', 'semana']).reset_index(drop=True)
+
+        for col in df.columns:
+            if col not in ['data_iniSE', 'Localidade_id', 'versao_modelo', 'municipio']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        if 'casos_est' in df.columns:
+            if 'casos' in df.columns: df.drop(columns=['casos'], inplace=True)
+            df.rename(columns={'casos_est': 'casos'}, inplace=True)
+
+        df['casos'] = pd.to_numeric(df['casos'], errors='coerce')
+        df = df.dropna(subset=['casos']).reset_index(drop=True)
+
+        # Interpolação do clima igual ao seu laboratório
+        for col in ['tempmed', 'umidmed', 'tempmin', 'tempmax', 'umidmin', 'umidmax']:
+            if col in df.columns:
+                df[col] = df[col].interpolate(method='linear').fillna(df[col].mean())
+
+        return df
+    except Exception as e:
+        st.error(f"Erro ao conectar com a API do InfoDengue: {e}")
+        return None
+
+df = puxar_dados_api()
+
+if df is not None:
+    # 4. Engenharia de Atributos em Tempo Real
+    df['log_casos'] = np.log1p(df['casos'])
+    df['sem_seno'] = np.sin(2 * np.pi * df['semana'] / 52.0)
+    df['sem_cos']  = np.cos(2 * np.pi * df['semana'] / 52.0)
+
+    for lag in range(1, 9): df[f'log_lag{lag}'] = df['log_casos'].shift(lag)
+    df['media_mov_4sem'] = df['log_casos'].shift(1).rolling(4).mean()
+    df['media_mov_8sem'] = df['log_casos'].shift(1).rolling(8).mean()
+
+    if 'tempmed' in df.columns:
+        df['temp_lag2'] = df['tempmed'].shift(2)
+        df['temp_lag4'] = df['tempmed'].shift(4)
+        df['temp_4sem'] = df['tempmed'].rolling(4).mean().shift(2)
+    if 'umidmed' in df.columns:
+        df['umid_lag2'] = df['umidmed'].shift(2)
+        df['umid_lag4'] = df['umidmed'].shift(4)
+    for col in ['p_rt1', 'Rt', 'nivel']:
+        if col in df.columns: df[f'{col}_lag1'] = df[col].shift(1)
+
+    # Definição exata das colunas que seu modelo espera receber
+    feature_cols = ['sem_seno', 'sem_cos', 'log_lag1', 'log_lag2', 'log_lag3', 'log_lag4',
+                    'log_lag5', 'log_lag6', 'log_lag7', 'log_lag8', 'media_mov_4sem', 'media_mov_8sem']
+    for col in ['temp_lag2', 'temp_lag4', 'temp_4sem', 'umid_lag2', 'umid_lag4', 'p_rt1_lag1', 'Rt_lag1', 'nivel_lag1']:
+        if col in df.columns: feature_cols.append(col)
+
+    df_limpo = df.dropna(subset=feature_cols + ['log_casos']).reset_index(drop=True)
+
+    # 5. Loop de Projeção Iterativa para as Próximas 4 Semanas (Sua Lógica)
+    historico_log = df_limpo['log_casos'].tail(8).tolist()
+    ultima_linha = df_limpo.iloc[-1].copy()
+    features_atuais = ultima_linha[feature_cols].copy()
+    sem_sim = int(ultima_linha['semana'])
+    log_futuro = []
+
+    for _ in range(4):
+        sem_sim = sem_sim + 1 if sem_sim < 52 else 1
+        features_atuais['sem_seno'] = np.sin(2 * np.pi * sem_sim / 52.0)
+        features_atuais['sem_cos'] = np.cos(2 * np.pi * sem_sim / 52.0)
+        for lag in range(1, 9): features_atuais[f'log_lag{lag}'] = historico_log[-lag]
+        features_atuais['media_mov_4sem'] = np.mean(historico_log[-4:])
+        features_atuais['media_mov_8sem'] = np.mean(historico_log[-8:])
+        
+        p = float(modelo_prod.predict(features_atuais.to_frame().T.to_numpy())[0])
+        log_futuro.append(p)
+        historico_log.append(p)
+
+    # Convertendo os resultados acumulados para casos reais
+    casos_projetados_fim = int(np.expm1(log_futuro[-1]))
+
+    # 6. Classificação do Nível de Alerta e Definição de Protocolo Clínico
+    if casos_projetados_fim < 50:
+        status, cor, classe_st = "AZUL — ESTÁVEL", "#1A5FFF", "success"
+        protocolo = "Situação de normalidade. Manter vigilância passiva de notificações nas unidades."
+    elif casos_projetados_fim < 150:
+        status, cor, classe_st = "AMARELO — ATENÇÃO", "#fca326", "warning"
+        protocolo = "Início de sazonalidade. Revisar estoques de testes rápidos NS1 e soro nas UBS."
+    elif casos_projetados_fim < 400:
+        status, cor, classe_st = "LARANJA — ALERTA", "#db6d28", "warning"
+        protocolo = "Pré-surto. Gatilho de contingência nível 1: Ampliar triagem, abrir salas de hidratação rápida."
+    else:
+        status, cor, classe_st = "VERMELHO — CRISE", "#cf222e", "error"
+        protocolo = "Emergência de Saúde Coletiva: Criar polo de atendimento específico e mutirões comunitários."
+
+    # 7. ORGANIZAÇÃO EM CARDS E COLUNAS (UI/UX)
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### 📊 Indicadores de Horizonte Preditivo (Próximos 30 dias)")
+        
+        # Estilizando o Metrics Card com CSS (Azul)
+        st.metric(label="Casos Estimados Acumulados", value=f"{casos_projetados_fim} casos")
+        st.markdown(f"**Nível de Risco Operacional:** <span style='color:{cor}; font-weight:bold; font-size:18px;'>{status}</span>", unsafe_allow_html=True)
+        
+        st.caption(f"Última atualização real: Semana {int(ultima_linha['semana'])}/{int(ultima_linha['ano'])}")
+
+    with col2:
+        st.markdown("### 📋 Protocolo Clínico UBS")
+        # Usando o card estilizado (Azul/Verde para Sucesso)
+        if classe_st == "success": st.success(protocolo)
+        elif classe_st == "warning": st.warning(protocolo)
+        else: st.error(protocolo)
+
+    st.markdown("---")
+
+    # 8. RENDERIZAÇÃO DO GRÁFICO (Estilo Tech/Dark/Blue)
+    st.markdown("### 📉 Curva de Monitoramento Recente (Últimas 15 semanas + Projeção)")
+    
+    # Configurando Matplotlib para o estilo Dark/Tech compatível com a logo
+    plt.rcParams.update({
+        "figure.facecolor": "#FFFFFF", # Mantém fundo do figure branco
+        "axes.facecolor": "#FFFFFF", # Mantém fundo dos eixos branco para legibilidade
+        "axes.edgecolor": "#1A5FFF", # Eixos azuis
+        "axes.labelcolor": "#1A5FFF", # Labels azuis
+        "xtick.color": "#1A5FFF", # Ticks azuis
+        "ytick.color": "#1A5FFF", # Ticks azuis
+        "grid.color": "#1A5FFF", # Grid azul claro
+        "grid.alpha": 0.1,
+        "text.color": "#1A5FFF" # Texto azul
+    })
+
+    fig, ax = plt.subplots(figsize=(10, 3.5))
+    df_ultimas = df_limpo.tail(15)
+    
+    # Plotando dados históricos em azul logo
+    eixo_x_real = range(len(df_ultimas))
+    ax.plot(eixo_x_real, df_ultimas['casos'], color='#1A5FFF', marker='o', label='Casos Reais (InfoDengue)', linewidth=2.5)
+    
+    # Plotando a projeção futura em verde neon (contraste)
+    eixo_x_futuro = range(len(df_ultimas) - 1, len(df_ultimas) + 4)
+    casos_futuros_reais = [df_ultimas['casos'].iloc[-1]] + [np.expm1(x) for x in log_futuro]
+    ax.plot(eixo_x_futuro, casos_futuros_reais, color='#39ff14', marker='^', linestyle='--', label='Projeção Aedex (4 sem.)', linewidth=2)
+    
+    ax.set_ylabel("Nº de Casos Acumulados")
+    # ax.set_xlabel("Semanas Epidemiológicas Recentes") # Opcional, o metric já fala o tempo
+    ax.grid(True)
+    ax.legend()
+    
+    # Exibe o gráfico do matplotlib de forma limpa dentro do Streamlit
+    st.pyplot(fig)
