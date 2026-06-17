@@ -12,18 +12,13 @@ st.set_page_config(page_title="Aedex - Monitoramento Inteligente", layout="wide"
 # 2. CSS MODERNO PARA UI/UX AVANÇADA
 st.markdown("""
 <style>
-    /* Fundo geral limpo e tipografia moderna */
     .stApp {
         background-color: #f8fafc;
         font-family: 'Inter', sans-serif;
     }
-    
-    /* Esconder elementos padrão do Streamlit para visual mais limpo */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
-
-    /* Estilização dos Cards de Métrica (Efeito flutuante) */
     div[data-testid="stMetric"] {
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
@@ -37,8 +32,6 @@ st.markdown("""
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
         border-color: #1A5FFF;
     }
-    
-    /* Cores das Métricas */
     div[data-testid="stMetricValue"] {
         color: #0f172a !important;
         font-weight: 800 !important;
@@ -121,7 +114,7 @@ def puxar_dados_api():
 df = puxar_dados_api()
 
 if df is not None:
-    # Engenharia de Atributos
+    # Engenharia de Atributos (Atualmente gera 12 variáveis)
     df['log_casos'] = np.log1p(df['casos'])
     df['sem_seno'] = np.sin(2 * np.pi * df['semana'] / 52.0)
     df['sem_cos']  = np.cos(2 * np.pi * df['semana'] / 52.0)
@@ -157,17 +150,29 @@ if df is not None:
         features_atuais['media_mov_4sem'] = np.mean(historico_log[-4:])
         features_atuais['media_mov_8sem'] = np.mean(historico_log[-8:])
         
-        # Estruturação e Alinhamento de Features
         input_df = features_atuais.to_frame().T
-        if hasattr(modelo_prod, 'feature_names_in_'):
-            input_df = input_df.reindex(columns=modelo_prod.feature_names_in_, fill_value=0.0)
-            
-        # SOLUÇÃO DO ERRO: Força a conversão de tipos de object para float64 antes do predict
         input_df = input_df.astype(float)
             
-        p = float(modelo_prod.predict(input_df)[0])
-        log_futuro.append(p)
-        historico_log.append(p)
+        try:
+            p = float(modelo_prod.predict(input_df)[0])
+            log_futuro.append(p)
+            historico_log.append(p)
+        except ValueError as e:
+            st.error(f"**Incompatibilidade de Variáveis:** O modelo e o código não estão alinhados. Erro bruto: `{e}`")
+            
+            features_esperadas = None
+            if hasattr(modelo_prod, 'feature_names_in_'):
+                features_esperadas = list(modelo_prod.feature_names_in_)
+            elif hasattr(modelo_prod, 'get_booster'):
+                try:
+                    features_esperadas = modelo_prod.get_booster().feature_names
+                except Exception:
+                    pass
+            
+            if features_esperadas:
+                st.warning(f"O seu modelo '.pkl' foi treinado especificamente com estas {len(features_esperadas)} variáveis: \n\n`{', '.join(features_esperadas)}`")
+                st.info("Para resolver o erro definitivamente, volte na seção de 'Engenharia de Atributos' no código e garanta que o DataFrame crie exatamente essas colunas listadas acima.")
+            st.stop()
 
     casos_projetados_fim = int(np.expm1(log_futuro[-1]))
 
@@ -213,7 +218,6 @@ if df is not None:
     
     fig = go.Figure()
     
-    # Linha do Histórico
     fig.add_trace(go.Scatter(
         x=df_ultimas['label'], 
         y=df_ultimas['casos'], 
@@ -223,7 +227,6 @@ if df is not None:
         marker=dict(size=8, color='#1A5FFF')
     ))
     
-    # Linha da Projeção
     labels_futuro_com_ultimo = [df_ultimas['label'].iloc[-1]] + labels_futuro
     casos_futuros_reais = [df_ultimas['casos'].iloc[-1]] + [np.expm1(x) for x in log_futuro]
     
