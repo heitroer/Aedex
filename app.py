@@ -72,7 +72,15 @@ def puxar_dados_api():
         df['ano'] = df['SE'].astype(str).str[:4].astype(int)
         df['semana'] = df['SE'].astype(str).str[4:].astype(int)
         df = df.sort_values(['ano', 'semana']).reset_index(drop=True)
-        df['casos'] = pd.to_numeric(df['casos_est'], errors='coerce')
+        
+        # CORREÇÃO: Forçar conversão para numérico (evita o erro do interpolate)
+        for col in df.columns:
+            if col not in ['data_iniSE', 'Localidade_id', 'versao_modelo', 'municipio']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+        if 'casos_est' in df.columns:
+            df['casos'] = df['casos_est']
+            
         return df.dropna(subset=['casos']).reset_index(drop=True)
     except: 
         return None
@@ -91,7 +99,6 @@ if df is not None and modelo_prod is not None:
     df['sem_seno'] = np.sin(2 * np.pi * df['semana'] / 52.0)
     df['sem_cos']  = np.cos(2 * np.pi * df['semana'] / 52.0)
     
-    # 8 lags apenas (conforme seu treino)
     for lag in range(1, 9): 
         df[f'log_lag{lag}'] = df['log_casos'].shift(lag)
         
@@ -120,7 +127,7 @@ if df is not None and modelo_prod is not None:
     # Geração correta do passado (Validação)
     df_limpo['predicao_casos'] = np.expm1(modelo_prod.predict(df_limpo[feature_cols].to_numpy())).astype(int)
 
-    # Projeção Futura Iterativa (Usando os 8 lags)
+    # Projeção Futura Iterativa
     historico_log = df_limpo['log_casos'].tail(8).tolist()
     ultima_linha = df_limpo.iloc[-1].copy()
     features_atuais = ultima_linha[feature_cols].copy()
@@ -141,7 +148,6 @@ if df is not None and modelo_prod is not None:
         features_atuais['media_mov_4sem'] = np.mean(historico_log[-4:])
         features_atuais['media_mov_8sem'] = np.mean(historico_log[-8:])
         
-        # Predição com array estruturado na ordem exata
         p = float(modelo_prod.predict(features_atuais.to_frame().T.to_numpy())[0])
         log_futuro.append(p)
         historico_log.append(p)
@@ -208,5 +214,5 @@ fig.update_layout(
 )
 
 st.markdown('<div class="custom-card" style="padding: 10px 24px 24px 24px;">', unsafe_allow_html=True)
-st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
+st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 st.markdown("</div>", unsafe_allow_html=True)
