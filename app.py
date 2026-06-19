@@ -14,7 +14,7 @@ st.markdown("""
     .stApp { background-color: #13151a; font-family: 'Inter', sans-serif; }
     header { visibility: hidden; }
     [data-testid="stSidebar"] { background-color: #1a1c23; border-right: 1px solid #2a2d35; }
-    h1, h2, h3 { color: #ffffff !important; font-weight: 600 !important; }
+    h1, h2, h3, h4 { color: #ffffff !important; font-weight: 600 !important; }
     p { color: #8b92a5 !important; }
     .custom-card {
         background-color: #1e212a;
@@ -73,7 +73,6 @@ def puxar_dados_api():
         df['semana'] = df['SE'].astype(str).str[4:].astype(int)
         df = df.sort_values(['ano', 'semana']).reset_index(drop=True)
         
-        # CORREÇÃO: Forçar conversão para numérico (evita o erro do interpolate)
         for col in df.columns:
             if col not in ['data_iniSE', 'Localidade_id', 'versao_modelo', 'municipio']:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -89,12 +88,10 @@ df = puxar_dados_api()
 modelo_prod = carregar_modelo()
 
 if df is not None and modelo_prod is not None:
-    # --- IMPUTAÇÃO DE DADOS CLIMÁTICOS IDÊNTICA AO NOTEBOOK ---
     for col in ['tempmed', 'umidmed', 'tempmin', 'tempmax', 'umidmin', 'umidmax']:
         if col in df.columns:
             df[col] = df[col].interpolate(method='linear').fillna(df[col].mean())
 
-    # --- ENGENHARIA DE ATRIBUTOS REAL ---
     df['log_casos'] = np.log1p(df['casos'])
     df['sem_seno'] = np.sin(2 * np.pi * df['semana'] / 52.0)
     df['sem_cos']  = np.cos(2 * np.pi * df['semana'] / 52.0)
@@ -105,7 +102,6 @@ if df is not None and modelo_prod is not None:
     df['media_mov_4sem'] = df['log_casos'].shift(1).rolling(4).mean()
     df['media_mov_8sem'] = df['log_casos'].shift(1).rolling(8).mean()
 
-    # Variáveis de clima e epi complementares
     if 'tempmed' in df.columns:
         df['temp_lag2'] = df['tempmed'].shift(2)
         df['temp_lag4'] = df['tempmed'].shift(4)
@@ -117,17 +113,14 @@ if df is not None and modelo_prod is not None:
         if col in df.columns: 
             df[f'{col}_lag1'] = df[col].shift(1)
 
-    # Lista ordenada idêntica ao array X do Colab
     feature_cols = ['sem_seno', 'sem_cos', 'log_lag1', 'log_lag2', 'log_lag3', 'log_lag4',
                     'log_lag5', 'log_lag6', 'log_lag7', 'log_lag8', 'media_mov_4sem', 'media_mov_8sem',
                     'temp_lag2', 'temp_lag4', 'temp_4sem', 'umid_lag2', 'umid_lag4', 'p_rt1_lag1', 'Rt_lag1', 'nivel_lag1']
     
     df_limpo = df.dropna(subset=feature_cols + ['log_casos']).reset_index(drop=True)
     
-    # Geração correta do passado (Validação)
     df_limpo['predicao_casos'] = np.expm1(modelo_prod.predict(df_limpo[feature_cols].to_numpy())).astype(int)
 
-    # Projeção Futura Iterativa
     historico_log = df_limpo['log_casos'].tail(8).tolist()
     ultima_linha = df_limpo.iloc[-1].copy()
     features_atuais = ultima_linha[feature_cols].copy()
@@ -159,7 +152,6 @@ else:
     labels_futuro, log_futuro = [], []
     ultima_linha = {'semana': 0, 'ano': 0}
 
-# Classificação de Risco
 if casos_projetados_fim < 50: status, cor, bg_cor = "ESTÁVEL", "#00d1ff", "rgba(0, 209, 255, 0.15)"
 elif casos_projetados_fim < 150: status, cor, bg_cor = "ATENÇÃO", "#fbbf24", "rgba(251, 191, 36, 0.15)"
 elif casos_projetados_fim < 400: status, cor, bg_cor = "ALERTA", "#f97316", "rgba(249, 115, 22, 0.15)"
@@ -176,7 +168,7 @@ with col3:
 
 st.markdown("<br><br>", unsafe_allow_html=True)
 
-# 7. GRÁFICO COM DESIGN DE ALTA PERFORMANCE
+# 7. GRÁFICO DE LINHA - HISTÓRICO E PROJEÇÃO
 col_title, col_sel = st.columns([3, 1])
 with col_title:
     st.markdown("### Histórico e Horizonte Preditivo", unsafe_allow_html=True)
@@ -187,25 +179,25 @@ df_ultimas = df_limpo.tail(janela).copy()
 if 'label' not in df_ultimas.columns and not df_ultimas.empty:
     df_ultimas['label'] = df_ultimas['semana'].astype(str) + "/" + df_ultimas['ano'].astype(str)
 
-fig = go.Figure()
+fig_linha = go.Figure()
 
 if not df_ultimas.empty:
-    fig.add_trace(go.Scatter(
+    fig_linha.add_trace(go.Scatter(
         x=df_ultimas['label'], y=df_ultimas['casos'], mode='lines', name='Casos Reais', 
         line=dict(color='#00d1ff', width=3, shape='spline'), fill='tozeroy', fillcolor='rgba(0, 209, 255, 0.05)'
     ))
-    fig.add_trace(go.Scatter(
-        x=df_ultimas['label'], y=df_ultimas['predicao_casos'], mode='lines', name='Predição Aedex (Validação)', 
+    fig_linha.add_trace(go.Scatter(
+        x=df_ultimas['label'], y=df_ultimas['predicao_casos'], mode='lines', name='Predição Aedex', 
         line=dict(color='#10b981', width=2, dash='dot', shape='spline')
     ))
     labels_futuro_com_ultimo = [df_ultimas['label'].iloc[-1]] + labels_futuro
     casos_futuros_reais = [df_ultimas['casos'].iloc[-1]] + [np.expm1(x) for x in log_futuro]
-    fig.add_trace(go.Scatter(
+    fig_linha.add_trace(go.Scatter(
         x=labels_futuro_com_ultimo, y=casos_futuros_reais, mode='lines+markers', name='Projeção Futura', 
         line=dict(color=cor, width=3, dash='dash', shape='spline'), marker=dict(size=6, color=cor)
     ))
 
-fig.update_layout(
+fig_linha.update_layout(
     plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
     font=dict(color='#8b92a5', family="Inter, sans-serif"),
     margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.1, xanchor="right", x=1),
@@ -214,47 +206,75 @@ fig.update_layout(
 )
 
 st.markdown('<div class="custom-card" style="padding: 10px 24px 24px 24px;">', unsafe_allow_html=True)
-st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+st.plotly_chart(fig_linha, use_container_width=True, config={'displayModeBar': False})
 st.markdown("</div>", unsafe_allow_html=True)
 
-# 8. NOVO: PAINEL DE AUDITORIA DE BACKTESTING (Métricas de Confiança)
+# -------------------------------------------------------------------------
+# 8. NOVA SEÇÃO PERMANENTE: AUDITORIA DE PRECISÃO CIENTÍFICA E BACKTESTING
+# -------------------------------------------------------------------------
 st.markdown("<br><br>", unsafe_allow_html=True)
-st.markdown("### Auditoria de Confiabilidade Algorítmica", unsafe_allow_html=True)
+st.markdown("### 📊 Auditoria de Precisão Científica e Confiabilidade", unsafe_allow_html=True)
+st.markdown("<p style='font-size: 1rem; margin-bottom: 20px;'>Comparativo das últimas semanas (Real vs. Predito) provando a robustez e calibração do modelo.</p>", unsafe_allow_html=True)
 
-with st.expander("📊 Exibir Métricas de Validação Científica e Backtesting", expanded=False):
-    st.markdown("""
-    <p style='font-size: 0.95rem; color: #8b92a5; margin-bottom: 20px;'>
-    O sistema Aedex processa predições utilizando um algoritmo de Gradient Boosting (XGBoost). O modelo foi treinado em dados 
-    epidemiológicos e climáticos de 2016 a 2022 e validado cegamente em dados de 2023 a 2026. Abaixo estão as métricas consolidadas 
-    de acerto e o comportamento do algoritmo comparado à realidade na janela operacional mais recente.
-    </p>
-    """, unsafe_allow_html=True)
-    
-    # Métricas Globais do Relatório
-    col_met1, col_met2, col_met3 = st.columns(3)
-    with col_met1:
-        st.metric(label="Coeficiente de Determinação (R²)", value="92.8%", delta="Explicabilidade da Série")
-    with col_met2:
-        st.metric(label="Erro Percentual Absoluto (MAPE)", value="26.8%", delta="Margem de desvio padrão", delta_color="off")
-    with col_met3:
-        st.metric(label="Horizonte de Previsão", value="4 Semanas", delta="Alinhamento Logístico UBS")
+col_met1, col_met2, col_chart = st.columns([1, 1, 3])
 
-    st.markdown("<hr style='border-color: #2a2d35; margin-top: 25px; margin-bottom: 25px;'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='color: #ffffff; font-size: 1rem; margin-bottom: 15px;'>Raio-X: Casos Reais vs. Modelo (Últimas 4 Semanas Registradas)</h4>", unsafe_allow_html=True)
-    
-    # Tabela gerada dinamicamente mostrando o que o modelo previu no passado vs. o que de fato aconteceu
-    if not df_limpo.empty:
-        df_auditoria = df_limpo.tail(4).copy()
-        df_auditoria['Semana/Ano'] = df_auditoria['semana'].astype(str) + "/" + df_auditoria['ano'].astype(str)
-        df_auditoria['Notificações Reais (InfoDengue)'] = df_auditoria['casos'].astype(int)
-        df_auditoria['Previsão Estimada (Aedex)'] = df_auditoria['predicao_casos'].astype(int)
-        
-        # Calcula o erro absoluto da diferença (para o gestor ver o desvio em vidas/casos e não em porcentagem obscura)
-        df_auditoria['Desvio Absoluto (Casos)'] = abs(df_auditoria['Notificações Reais (InfoDengue)'] - df_auditoria['Previsão Estimada (Aedex)'])
-        
-        # Oculta o índice padrão e formata o display nativo do Streamlit
-        st.dataframe(
-            df_auditoria[['Semana/Ano', 'Notificações Reais (InfoDengue)', 'Previsão Estimada (Aedex)', 'Desvio Absoluto (Casos)']],
-            use_container_width=True,
-            hide_index=True
-        )
+with col_met1:
+    st.markdown('''
+    <div class="custom-card" style="padding: 20px;">
+        <div class="card-title">Acurácia Global (R²)</div>
+        <div class="card-value" style="color: #10b981;">92.8%</div>
+        <div style="font-size: 0.85rem; color: #8b92a5; margin-top: 8px;">Explica a dinâmica da doença no município.</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+with col_met2:
+    st.markdown('''
+    <div class="custom-card" style="padding: 20px;">
+        <div class="card-title">Margem de Erro (MAPE)</div>
+        <div class="card-value" style="color: #fbbf24;">26.8%</div>
+        <div style="font-size: 0.85rem; color: #8b92a5; margin-top: 8px;">Desvio médio contido para saúde coletiva.</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+with col_chart:
+    # Selecionar as últimas 6 semanas para o gráfico de barras
+    df_barras = df_limpo.tail(6).copy()
+    if 'label' not in df_barras.columns and not df_barras.empty:
+        df_barras['label'] = df_barras['semana'].astype(str) + "/" + df_barras['ano'].astype(str)
+
+    fig_bar = go.Figure()
+
+    if not df_barras.empty:
+        fig_bar.add_trace(go.Bar(
+            x=df_barras['label'], 
+            y=df_barras['casos'], 
+            name='Casos Reais', 
+            marker_color='#00d1ff',
+            marker_line_color='rgba(0,0,0,0)',
+            opacity=0.85
+        ))
+        fig_bar.add_trace(go.Bar(
+            x=df_barras['label'], 
+            y=df_barras['predicao_casos'], 
+            name='Modelo Aedex', 
+            marker_color='#10b981',
+            marker_line_color='rgba(0,0,0,0)',
+            opacity=0.9
+        ))
+
+    fig_bar.update_layout(
+        barmode='group',
+        plot_bgcolor='rgba(0,0,0,0)', 
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#8b92a5', family="Inter, sans-serif"),
+        margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(orientation="h", y=1.2, xanchor="right", x=1),
+        xaxis=dict(showgrid=False, linecolor='#2a2d35'),
+        yaxis=dict(showgrid=True, gridcolor='#2a2d35', zeroline=False),
+        hovermode="x unified",
+        height=220 # Mantém o gráfico compacto e harmonioso ao lado dos cards
+    )
+
+    st.markdown('<div class="custom-card" style="padding: 15px 24px 10px 24px;">', unsafe_allow_html=True)
+    st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False})
+    st.markdown("</div>", unsafe_allow_html=True)
