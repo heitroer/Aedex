@@ -63,9 +63,15 @@ def carregar_modelo():
     except:
         return None
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600)  # Checa a API a cada 1 hora de forma automática
 def puxar_dados_api():
-    url = "https://info.dengue.mat.br/api/alertcity/?geocode=5002704&disease=dengue&format=json&ew_start=1&ey_start=2016"
+    import datetime
+    
+    # Captura o ano corrente dinamicamente
+    ano_atual = datetime.datetime.now().year
+    
+    # URL com os parâmetros obrigatórios preenchidos de forma dinâmica
+    url = f"https://info.dengue.mat.br/api/alertcity/?geocode=5002704&disease=dengue&format=json&ew_start=1&ey_start=2016&ew_end=53&ey_end={ano_atual}"
     try:
         resp = requests.get(url, timeout=25)
         df = pd.DataFrame(resp.json())
