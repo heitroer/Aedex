@@ -1,0 +1,12 @@
+# Ignorar os binários pesados dos modelos preditivos
+*.pkl
+
+# Ignorar caches locais do ambiente Python
+__pycache__/
+*.pyc
+
+# Ignorar configurações do editor/sistema operacional
+.virtualenv/
+venv/
+.DS_Store
+Thumbs.db
