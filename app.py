@@ -316,3 +316,31 @@ with col_chart:
     st.markdown('<div class="custom-card" style="padding: 15px 24px 10px 24px;">', unsafe_allow_html=True)
     st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False})
     st.markdown("</div>", unsafe_allow_html=True)
+# HACK TEMPORÁRIO DE AUDITORIA: Gerador de Payload para o Swagger
+st.markdown("### 📋 Payload Real para Copiar no Swagger")
+if df_limpo is not None and not df_limpo.empty:
+    ultima_f = df_limpo.iloc[-1]
+    payload_real = {
+        "localidade_id": "5002704-B01",
+        "semana_epidemiologica": int(ultima_f["semana"]),
+        "ano": int(ultima_f["ano"]),
+        "Rt_lag1": float(ultima_f["Rt"]) if "Rt" in ultima_f else 1.0,
+        "nivel_lag1": int(ultima_f["nivel"]) if "nivel" in ultima_f else 2,
+        "p_rt1_lag1": float(ultima_f["p_rt1"]) if "p_rt1" in ultima_f else 0.8,
+        "casos_lag1": int(ultima_f["casos"]),
+        "casos_lag2": int(df_limpo.iloc[-2]["casos"]),
+        "casos_lag3": int(df_limpo.iloc[-3]["casos"]),
+        "casos_lag4": int(df_limpo.iloc[-4]["casos"]),
+        "casos_lag5": int(df_limpo.iloc[-5]["casos"]),
+        "casos_lag6": int(df_limpo.iloc[-6]["casos"]),
+        "casos_lag7": int(df_limpo.iloc[-7]["casos"]),
+        "casos_lag8": int(df_limpo.iloc[-8]["casos"]),
+        "temp_atual": float(ultima_f["tempmed"]),
+        "temp_lag2": float(df_limpo.iloc[-2]["tempmed"]),  # Corresponde ao shift(1) do treino
+        "temp_lag4": float(df_limpo.iloc[-4]["tempmed"]),  # Corresponde ao shift(3) do treino
+        "temp_4sem": float(ultima_f["temp_4sem"]),
+        "umid_atual": float(ultima_f["umidmed"]),
+        "umid_lag2": float(df_limpo.iloc[-2]["umidmed"]),
+        "umid_lag4": float(df_limpo.iloc[-4]["umidmed"])
+    }
+    st.json(payload_real)
