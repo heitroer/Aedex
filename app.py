@@ -64,21 +64,15 @@ with st.sidebar:
 st.markdown("<h1 style='padding-bottom: 5px; font-size: 2.2rem;'>Monitoramento Epidemiológico Inteligente</h1>", unsafe_allow_html=True)
 st.markdown("<p style='font-size: 1.1rem; margin-bottom: 30px;'>Projeção de casos de Dengue e gestão de risco em tempo real com arquitetura Multi-Output Delta.</p>", unsafe_allow_html=True)
 
-# 5. LÓGICA DE BACKEND (Carregamento Real de Modelos com Quebra Automatizada de Cache)
-def obter_hash_modificacao_modelos():
-    """Calcula a soma dos timestamps dos modelos para forçar re-carregamento se algum mudar."""
-    try:
-        return sum(os.path.getmtime(f"modelo_aedex_sem{h}.json") for h in range(1, 5) if os.path.exists(f"modelo_aedex_sem{h}.json"))
-    except:
-        return 0
-
+# 5. LÓGICA DE BACKEND (Carregamento dos 4 Modelos Otimizados)
 @st.cache_resource
-def carregar_modelos_multioutput(mtime_hash):
+def carregar_modelos_multioutput():
     from xgboost import XGBRegressor
     modelos = {}
     for h in range(1, 5):
         try:
             modelo = XGBRegressor()
+            _ = os.path.getmtime(f"modelo_aedex_sem{h}.json")
             modelo.load_model(f"modelo_aedex_sem{h}.json")
             modelos[h] = modelo
         except:
@@ -109,10 +103,7 @@ def puxar_dados_api():
         return None
 
 df = puxar_dados_api()
-
-# Passar o hash dinâmico como argumento garante a quebra automática de cache caso os arquivos JSON mudem
-hash_modelos = obter_hash_modificacao_modelos()
-modelos_prod = carregar_modelos_multioutput(hash_modelos)
+modelos_prod = carregar_modelos_multioutput()
 
 # Verifica se todos os 4 modelos foram carregados com sucesso
 modelos_ok = modelos_prod and all(modelos_prod[h] is not None for h in range(1, 5))
@@ -148,27 +139,30 @@ if df is not None and modelos_ok:
         if col in df.columns: 
             df[f'{col}_lag1'] = df[col]
 
-    feature_cols = ['sem_seno', 'sem_cos', 'log_lag1', 'log_lag2', 'log_lag3', 'log_lag4',
-                    'log_lag5', 'log_lag6', 'log_lag7', 'log_lag8', 'media_mov_4sem', 'media_mov_8sem',
-                    'temp_atual', 'temp_lag2', 'temp_lag4', 'temp_4sem', 'umid_atual', 'umid_lag2', 'umid_lag4',
-                    'p_rt1_lag1', 'Rt_lag1', 'nivel_lag1']
+    # LISTA DE COLUNAS IDÊNTICA AO TREINO E À API (Evita desalinhamento posicional)
+    FEATURE_COLS = [
+        'sem_seno', 'sem_cos', 'log_lag1', 'log_lag2', 'log_lag3', 'log_lag4',
+        'log_lag5', 'log_lag6', 'log_lag7', 'log_lag8', 'media_mov_4sem', 'media_mov_8sem',
+        'temp_atual', 'temp_lag2', 'temp_lag4', 'temp_4sem', 'umid_atual', 'umid_lag2', 'umid_lag4',
+        'p_rt1_lag1', 'Rt_lag1', 'nivel_lag1'
+    ]
     
-    df_limpo = df.dropna(subset=feature_cols).reset_index(drop=True)
+    df_limpo = df.dropna(subset=FEATURE_COLS).reset_index(drop=True)
     
-    # Histórico do Modelo 1 (Alinhado com conversão explícita float32 para evitar micro-desvios)
-    X_hist = df_limpo[feature_cols].to_numpy(dtype=np.float32)
+    # Histórico do Modelo 1 (Garantindo reordenação estrutural e conversão para float32)
+    df_hist_input = df_limpo[FEATURE_COLS]
+    X_hist = df_hist_input.to_numpy(dtype=np.float32)
     pred_delta_hist = modelos_prod[1].predict(X_hist)
     pred_log_hist = pred_delta_hist + df_limpo['log_lag1'].to_numpy(dtype=np.float32)
     # Deslocamos 1 semana para frente para comparar a predição feita em 't' com o real de 't+1'
     df_limpo['predicao_casos'] = pd.Series(np.expm1(pred_log_hist), index=df_limpo.index).shift(1).fillna(0).astype(int)
 
-    # Captura da Linha Mais Recente para Projeção Futura Exclusiva
-    linha_atual = df_limpo.iloc[-1:]
+    # Captura da Linha Mais Recente com Reordenação Forçada Nominale e float32 Estrito
+    linha_atual = df_limpo.iloc[-1:].copy()
+    df_input_dashboard = linha_atual[FEATURE_COLS]
+    X_inferencia = df_input_dashboard.to_numpy(dtype=np.float32)
     
-    # REORDENAÇÃO E CONVERSÃO MATRICIAL ESTREITA (Garante paridade matemática total com a API)
-    X_inferencia = linha_atual[feature_cols].to_numpy(dtype=np.float32)
     log_casos_atual = float(linha_atual['log_lag1'].values[0])
-    
     sem_atual = int(linha_atual['semana'].values[0])
     ano_atual = int(linha_atual['ano'].values[0])
     
@@ -177,7 +171,7 @@ if df is not None and modelos_ok:
     
     sem_sim, ano_sim = sem_atual, ano_atual
     
-    # Extração direta das 4 previsões independentes sem loops recursivos
+    # Extração direta das 4 previsões independentes
     for h in range(1, 5):
         sem_sim += 1
         if sem_sim > 52: 
@@ -185,7 +179,7 @@ if df is not None and modelos_ok:
             ano_sim += 1
         labels_futuro.append(f"{sem_sim}/{ano_sim}")
         
-        # Predição do Delta e Reconstrução Blindada (Mínimo de 0 casos)
+        # Predição do Delta e Reconstrução Blindada
         pred_delta = modelos_prod[h].predict(X_inferencia)[0]
         pred_log_final = max(0.0, float(pred_delta) + log_casos_atual)
         casos_futuros.append(int(np.expm1(pred_log_final)))
@@ -352,8 +346,8 @@ if df_limpo is not None and not df_limpo.empty:
         "casos_lag7": int(df_limpo.iloc[-7]["casos"]),
         "casos_lag8": int(df_limpo.iloc[-8]["casos"]),
         "temp_atual": float(ultima_f["tempmed"]),
-        "temp_lag2": float(df_limpo.iloc[-2]["tempmed"]),  # Corresponde ao shift(1) do treino
-        "temp_lag4": float(df_limpo.iloc[-4]["tempmed"]),  # Corresponde ao shift(3) do treino
+        "temp_lag2": float(df_limpo.iloc[-2]["tempmed"]),
+        "temp_lag4": float(df_limpo.iloc[-4]["tempmed"]),
         "temp_4sem": float(ultima_f["temp_4sem"]),
         "umid_atual": float(ultima_f["umidmed"]),
         "umid_lag2": float(df_limpo.iloc[-2]["umidmed"]),
