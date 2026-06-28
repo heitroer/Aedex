@@ -65,12 +65,16 @@ st.markdown("<h1 style='padding-bottom: 5px; font-size: 2.2rem;'>Monitoramento E
 st.markdown("<p style='font-size: 1.1rem; margin-bottom: 30px;'>Projeção de casos de Dengue e gestão de risco em tempo real com arquitetura Multi-Output Delta.</p>", unsafe_allow_html=True)
 
 # 5. LÓGICA DE BACKEND (Carregamento dos 4 Modelos Otimizados)
+# Substitua a abordagem antiga do joblib por esta:
 @st.cache_resource
 def carregar_modelos_multioutput():
+    from xgboost import XGBRegressor
     modelos = {}
     for h in range(1, 5):
         try:
-            modelos[h] = joblib.load(f"modelo_aedex_sem{h}.pkl")
+            modelo = XGBRegressor()
+            modelo.load_model(f"modelo_aedex_sem{h}.json")
+            modelos[h] = modelo
         except:
             modelos[h] = None
     return modelos
