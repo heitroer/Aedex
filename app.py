@@ -6,6 +6,7 @@ import joblib
 import requests
 import plotly.graph_objects as go
 import datetime
+import os
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Aedex - Monitoramento Inteligente", layout="wide", initial_sidebar_state="expanded")
@@ -73,6 +74,7 @@ def carregar_modelos_multioutput():
     for h in range(1, 5):
         try:
             modelo = XGBRegressor()
+            _ = os.path.getmtime(f"modelo_aedex_sem{h}.json")
             modelo.load_model(f"modelo_aedex_sem{h}.json")
             modelos[h] = modelo
         except:
