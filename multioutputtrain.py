@@ -143,8 +143,8 @@ for horizon in range(1, 5):
         random_state=42
     )
     modelo_prod.fit(X_df.to_numpy(), y_delta)
-    
-    # Exportação dos binários pkl otimizados
-    joblib.dump(modelo_prod, f'modelo_aedex_sem{horizon}.pkl')
+    # IMPORTANTE: Esta linha PRECISA de 4 espaços (ou 1 tab) de recuo para rodar 4 vezes!
+    modelo_prod.save_model(f'modelo_aedex_sem{horizon}.json')
+    print(f"-> Modelo da Semana {horizon} exportado nativamente em JSON.")
 
 print("\n🚀 Todos os modelos foram salvos e blindados matematicamente contra Data Leakage.")
