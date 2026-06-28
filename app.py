@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -65,16 +64,21 @@ with st.sidebar:
 st.markdown("<h1 style='padding-bottom: 5px; font-size: 2.2rem;'>Monitoramento Epidemiológico Inteligente</h1>", unsafe_allow_html=True)
 st.markdown("<p style='font-size: 1.1rem; margin-bottom: 30px;'>Projeção de casos de Dengue e gestão de risco em tempo real com arquitetura Multi-Output Delta.</p>", unsafe_allow_html=True)
 
-# 5. LÓGICA DE BACKEND (Carregamento dos 4 Modelos Otimizados)
-# Substitua a abordagem antiga do joblib por esta:
+# 5. LÓGICA DE BACKEND (Carregamento Real de Modelos com Quebra Automatizada de Cache)
+def obter_hash_modificacao_modelos():
+    """Calcula a soma dos timestamps dos modelos para forçar re-carregamento se algum mudar."""
+    try:
+        return sum(os.path.getmtime(f"modelo_aedex_sem{h}.json") for h in range(1, 5) if os.path.exists(f"modelo_aedex_sem{h}.json"))
+    except:
+        return 0
+
 @st.cache_resource
-def carregar_modelos_multioutput():
+def carregar_modelos_multioutput(mtime_hash):
     from xgboost import XGBRegressor
     modelos = {}
     for h in range(1, 5):
         try:
             modelo = XGBRegressor()
-            _ = os.path.getmtime(f"modelo_aedex_sem{h}.json")
             modelo.load_model(f"modelo_aedex_sem{h}.json")
             modelos[h] = modelo
         except:
@@ -105,7 +109,10 @@ def puxar_dados_api():
         return None
 
 df = puxar_dados_api()
-modelos_prod = carregar_modelos_multioutput()
+
+# Passar o hash dinâmico como argumento garante a quebra automática de cache caso os arquivos JSON mudem
+hash_modelos = obter_hash_modificacao_modelos()
+modelos_prod = carregar_modelos_multioutput(hash_modelos)
 
 # Verifica se todos os 4 modelos foram carregados com sucesso
 modelos_ok = modelos_prod and all(modelos_prod[h] is not None for h in range(1, 5))
@@ -148,17 +155,19 @@ if df is not None and modelos_ok:
     
     df_limpo = df.dropna(subset=feature_cols).reset_index(drop=True)
     
-    # Histórico do Modelo 1 (Alinhado temporalmente para o gráfico de Auditoria)
-    X_hist = df_limpo[feature_cols].to_numpy()
+    # Histórico do Modelo 1 (Alinhado com conversão explícita float32 para evitar micro-desvios)
+    X_hist = df_limpo[feature_cols].to_numpy(dtype=np.float32)
     pred_delta_hist = modelos_prod[1].predict(X_hist)
-    pred_log_hist = pred_delta_hist + df_limpo['log_lag1'].to_numpy()
+    pred_log_hist = pred_delta_hist + df_limpo['log_lag1'].to_numpy(dtype=np.float32)
     # Deslocamos 1 semana para frente para comparar a predição feita em 't' com o real de 't+1'
     df_limpo['predicao_casos'] = pd.Series(np.expm1(pred_log_hist), index=df_limpo.index).shift(1).fillna(0).astype(int)
 
     # Captura da Linha Mais Recente para Projeção Futura Exclusiva
     linha_atual = df_limpo.iloc[-1:]
-    X_inferencia = linha_atual[feature_cols].to_numpy()
-    log_casos_atual = linha_atual['log_lag1'].values[0]
+    
+    # REORDENAÇÃO E CONVERSÃO MATRICIAL ESTREITA (Garante paridade matemática total com a API)
+    X_inferencia = linha_atual[feature_cols].to_numpy(dtype=np.float32)
+    log_casos_atual = float(linha_atual['log_lag1'].values[0])
     
     sem_atual = int(linha_atual['semana'].values[0])
     ano_atual = int(linha_atual['ano'].values[0])
@@ -168,7 +177,7 @@ if df is not None and modelos_ok:
     
     sem_sim, ano_sim = sem_atual, ano_atual
     
-    # Extração direta das 4 previsões independentes sem loops recursivos que acumulam erros
+    # Extração direta das 4 previsões independentes sem loops recursivos
     for h in range(1, 5):
         sem_sim += 1
         if sem_sim > 52: 
@@ -178,7 +187,7 @@ if df is not None and modelos_ok:
         
         # Predição do Delta e Reconstrução Blindada (Mínimo de 0 casos)
         pred_delta = modelos_prod[h].predict(X_inferencia)[0]
-        pred_log_final = max(0.0, pred_delta + log_casos_atual)
+        pred_log_final = max(0.0, float(pred_delta) + log_casos_atual)
         casos_futuros.append(int(np.expm1(pred_log_final)))
 
     casos_projetados_fim = casos_futuros[-1]
@@ -322,6 +331,7 @@ with col_chart:
     st.markdown('<div class="custom-card" style="padding: 15px 24px 10px 24px;">', unsafe_allow_html=True)
     st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False})
     st.markdown("</div>", unsafe_allow_html=True)
+
 # HACK TEMPORÁRIO DE AUDITORIA: Gerador de Payload para o Swagger
 st.markdown("### 📋 Payload Real para Copiar no Swagger")
 if df_limpo is not None and not df_limpo.empty:
